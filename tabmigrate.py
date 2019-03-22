@@ -36,8 +36,8 @@ for server in ["in", "out"]:
 
 replace_connector_values = {
    "xml:base": tableau_servers["out"]["url"],
-   "named-connection caption": tableau_servers["out"]["db"],
-   "server": tableau_servers["out"]["db"],
+   "named-connection caption": tableau_servers["out"]["db"]["ip"],
+   "server": tableau_servers["out"]["db"]["ip"],
    "username": "tableau_er_stats"
 }
 
