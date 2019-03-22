@@ -18,8 +18,8 @@ servers:
 run:
   config:
     servers:
-      in: datalab-mi
-      out: datalab-minint
+      in: tableau1
+      out: tableau2
   actions:
     - delete_site
     - create_site
