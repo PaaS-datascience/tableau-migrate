@@ -1,16 +1,28 @@
 servers:
-  in:
+  tableau1:
     url: "http://tableau.in"
     site_id: site_in
     user: Admin_user_in
     password: Admin_password
-  out:
+  tableau2:
     url: "http://tableau.out"
-    db: 10.0.15.20
+    db: 
+      ip: 10.0.15.20
+      passwords:
+        db_user: db_user_password
+        other_user: other_password
     site_id: site_out
     site_name: 'My wonderful site'
     user: Admin_user_out
     password: Admin_password
-db:
-  passwords:
-    user: db_user_password
+run:
+  config:
+    servers:
+      in: datalab-mi
+      out: datalab-minint
+  actions:
+    - delete_site
+    - create_site
+    - migrate_projects
+    - migrate_datasources
+    - migrate_workbooks
