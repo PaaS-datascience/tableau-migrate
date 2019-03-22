@@ -1,0 +1,11 @@
+version: '2'
+
+services:
+  migrate:
+    build:
+      context: .
+      args:
+        proxy: ${http_proxy}
+    image: tableau-migrate:latest 
+    container_name: tableau-migrate 
+

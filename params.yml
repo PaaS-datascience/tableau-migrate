@@ -1,0 +1,16 @@
+servers:
+  in:
+    url: "http://tableau.in"
+    site_id: site_in
+    user: Admin_user_in
+    password: Admin_password
+  out:
+    url: "http://tableau.out"
+    db: 10.0.15.20
+    site_id: site_out
+    site_name: 'My wonderful site'
+    user: Admin_user_out
+    password: Admin_password
+db:
+  passwords:
+    user: db_user_password
