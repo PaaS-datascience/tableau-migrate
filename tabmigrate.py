@@ -19,30 +19,20 @@ else:
     with open(paramsFile, 'r') as f:
         params = yaml.load(f)
 
-print("Executing with params : {}".format(params))
-
-passwords = params["db"]["passwords"]
-
 tableau_servers = {}
-tableau_servers["in"] = params["servers"]["in"]
-tableau_servers["out"] = params["servers"]["out"]
+tableau_servers["in"] = params["servers"][params["run"]["config"]["servers"]["in"]]
+tableau_servers["out"] = params["servers"][params["run"]["config"]["servers"]["out"]]
+passwords = tableau_servers["out"]["db"]["passwords"]
 
-tableau_servers["in"]["auth"] = TSC.TableauAuth(tableau_servers["in"]["user"], 
-                                                tableau_servers["in"]["password"], 
-                                                site_id = tableau_servers["in"]["site_id"])
-tableau_servers["in"]["server"] = TSC.Server(tableau_servers["in"]["url"])
-# api >=3.2 has to be set in order to 
-tableau_servers["in"]["server"].version = '3.2'
-# insecure mode if problem with https certificates
-tableau_servers["in"]["server"].add_http_options({'verify': False})
-
-
-tableau_servers["out"]["auth"] = TSC.TableauAuth(tableau_servers["out"]["user"], 
-                                                tableau_servers["out"]["password"], 
-                                                site_id = tableau_servers["out"]["site_id"])
-tableau_servers["out"]["server"] = TSC.Server(tableau_servers["out"]["url"])
-tableau_servers["out"]["server"].version = '3.2'
-tableau_servers["out"]["server"].add_http_options({'verify': False})
+for server in ["in", "out"]:
+    tableau_servers[server]["auth"] = TSC.TableauAuth(tableau_servers[server]["user"], 
+                                                    tableau_servers[server]["password"], 
+                                                    site_id = tableau_servers[server]["site_id"])
+    tableau_servers[server]["server"] = TSC.Server(tableau_servers[server]["url"])
+    # api >=3.2 has to be set in order to 
+    tableau_servers[server]["server"].version = tableau_servers[server]["api"]
+    # insecure mode if problem with https certificates
+    tableau_servers[server]["server"].add_http_options({'verify': tableau_servers[server]["secure"]})
 
 replace_connector_values = {
    "xml:base": tableau_servers["out"]["url"],
@@ -159,12 +149,12 @@ def migrate_workbooks(input="in", output="out"):
                     print("WARNING: {}".format(e))
                     
 def delete_site(server="out"):
-    with tableau_servers[server]["server"].auth.sign_in(tableau_servers[server]["auth"]):
-        try:
+    try:
+        with tableau_servers[server]["server"].auth.sign_in(tableau_servers[server]["auth"]):
             site_id = tableau_servers[server]["server"].sites.get_by_name(tableau_servers[server]["site_name"]).id
             tableau_servers[server]["server"].sites.delete(site_id)
-        except Exception as e:
-            print("WARNING: {}".format(e))
+    except Exception as e:
+        print("WARNING: {}".format(e))
 
 def create_site(server="out"):
     new_site = TSC.SiteItem(name=tableau_servers[server]["site_name"], 
@@ -181,12 +171,12 @@ def create_site(server="out"):
                                                 site_id = tableau_servers[server]["site_id"])
 
 
-try:
-    delete_site()
-except:
-    pass
-create_site()
-migrate_projects()
-migrate_datasources()
-migrate_workbooks()
+# run macro as described in yaml
+if __name__ == '__main__':
+    import __main__
+    print("config:\n{}\nactions:\n{}".format(tableau_servers, params["run"]["actions"]))
+
+    for action in params["run"]["actions"]:
+        print("executing {}".format(action))
+        getattr(__main__, action)()
 
