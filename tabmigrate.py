@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 import tableauserverclient as TSC
-import os, re
+import os, re, time
 import os.path
 import zipfile
 import tempfile
 import urllib3
 import xml.etree.ElementTree as ET
 import yaml
+from multiprocessing import Process, Queue
+
+urllib3.disable_warnings()
 
 paramsFile = 'params.yml'
 localParams = 'params_local.yml'
@@ -34,12 +37,6 @@ for server in ["in", "out"]:
     # insecure mode if problem with https certificates
     tableau_servers[server]["server"].add_http_options({'verify': tableau_servers[server]["secure"]})
 
-replace_connector_values = {
-   "xml:base": tableau_servers["out"]["url"],
-   "named-connection caption": tableau_servers["out"]["db"]["ip"],
-   "server": tableau_servers["out"]["db"]["ip"],
-   "username": "tableau_er_stats"
-}
 
 ipath="tmp"
 
@@ -51,11 +48,18 @@ try:
 except:
     pass
 
-def updateTDSX(tdsx):
+def updateTDSX(tdsx, input="in", output="out"):
     # update tdsx, ie tableau datasource (connector) with replace_connector_values
     # generate a temp file
     tmpfd, tmpname = tempfile.mkstemp(dir=os.path.dirname(tdsx))
     os.close(tmpfd)
+    replace_connector_values = {
+        "xml:base": tableau_servers[output]["url"],
+        tableau_servers[input]["workbook_ref"]: tableau_servers[output]["workbook_ref"],
+        "named-connection caption": tableau_servers[output]["db"]["ip"],
+        "server": tableau_servers[output]["db"]["ip"],
+        "username": "tableau_er_stats"
+    }
 
     # create a temp copy of the archive without filename
     with zipfile.ZipFile(tdsx, 'r') as zin:
@@ -76,27 +80,30 @@ def updateTDSX(tdsx):
     os.remove(tdsx)
     os.rename(tmpname, tdsx)
 
+def migrate_datasource(datasource, input="in", output="out"):
+    try:
+        os.mkdir(os.path.join(ipath, datasource.project_id))
+    except:
+        pass
+    tdsx = os.path.join(ipath, datasource.project_id, datasource.id + '.tdsx')
+    print("datasource: {} > {}".format(datasource.name, tdsx))
+    datasource.project_id = pmap[datasource.project_id]
+    tableau_servers[input]["server"].datasources.download(datasource.id, filepath = tdsx)
+    print('patching {} to output server'.format(tdsx))
+    updateTDSX(tdsx, input, output)
+    tableau_servers[input]["server"].datasources.populate_connections(datasource)
+    cc = TSC.ConnectionCredentials(datasource.connections[0].username, passwords[datasource.connections[0].username], embed = True, oauth = False)
+    in_id = datasource.id
+    out_id = tableau_servers[output]["server"].datasources.publish(datasource, tdsx, TSC.Server.PublishMode.Overwrite, connection_credentials = cc).id
+    dmap[in_id] = out_id
+
 def migrate_datasources(input="in", output="out"):
     with tableau_servers[input]["server"].auth.sign_in(tableau_servers[input]["auth"]):
         with tableau_servers[output]["server"].auth.sign_in(tableau_servers[output]["auth"]):
             all_datasources, pagination_item = tableau_servers[input]["server"].datasources.get()
             print("\nThere are {} datasources on site: ".format(pagination_item.total_available))
             for datasource in all_datasources:
-                try:
-                    os.mkdir(os.path.join(ipath, datasource.project_id))
-                except:
-                    pass
-                tdsx = os.path.join(ipath, datasource.project_id, datasource.id + '.tdsx')
-                print("datasource: {} > {}".format(datasource.name, tdsx))
-                datasource.project_id = pmap[datasource.project_id]
-                tableau_servers[input]["server"].datasources.download(datasource.id, filepath = tdsx)
-                print('patching {} to output server'.format(tdsx))
-                updateTDSX(tdsx)
-                tableau_servers[input]["server"].datasources.populate_connections(datasource)
-                cc = TSC.ConnectionCredentials(datasource.connections[0].username, passwords[datasource.connections[0].username], embed = True, oauth = False)
-                in_id = datasource.id
-                out_id = tableau_servers[output]["server"].datasources.publish(datasource, tdsx, TSC.Server.PublishMode.Overwrite, connection_credentials = cc).id
-                dmap[in_id] = out_id
+                migrate_datasource(datasource,input=input,output=output)
 
 def migrate_projects(input="in", output="out"):
     with tableau_servers[input]["server"].auth.sign_in(tableau_servers[input]["auth"]):
@@ -121,33 +128,55 @@ def migrate_projects(input="in", output="out"):
                     else:
                         print("unable to migrate project: {} {} {}".format(project.name, project.id, project.parent_id))
                         all_projects.append(project)
-                        
-                            
+
+def migrate_workbook(i ,workbook, process_queue, input="in", output="out"):
+    try:
+        os.mkdir(os.path.join(ipath, workbook.project_id))
+    except:
+        pass
+    twb = os.path.join(ipath, workbook.project_id, workbook.id + '.twb')
+    print("workbook: {} > {}".format(workbook.name, twb))
+    tableau_servers[input]["server"].workbooks.download(workbook.id, filepath = twb)
+    if True:
+        workbook.project_id = pmap[workbook.project_id]
+        tableau_servers[output]["server"].workbooks.publish(workbook, twb, TSC.Server.PublishMode.CreateNew)
+    # tableau_servers[input]["server"].workbooks.populate_connections(workbook)
+    # cc = TSC.ConnectionCredentials(workbook.connections[0].username, passwords[workbook.connections[0].username], embed = True, oauth = False)
+        # tableau_servers[output]["server"].workbooks.publish(workbook, twb, TSC.Server.PublishMode.Overwrite, connection_credentials = cc)
+        #tableau_servers[output]["server"].workbooks.publish(workbook, twb, TSC.Server.PublishMode.Overwrite)
+    # try:
+    # except Exception as e:
+    #     print("WARNING: {}".format(e))
+    process_queue.get(i)
 
 def migrate_workbooks(input="in", output="out"):
     with tableau_servers[input]["server"].auth.sign_in(tableau_servers[input]["auth"]):
         with tableau_servers[output]["server"].auth.sign_in(tableau_servers[output]["auth"]):
             all_workbooks, pagination_item = tableau_servers[input]["server"].workbooks.get()
             print("\nThere are {} workbooks on site: ".format(pagination_item.total_available))
-            for workbook in all_workbooks:
-                try:
-                    os.mkdir(os.path.join(ipath, workbook.project_id))
-                except:
-                    pass
-                twb = os.path.join(ipath, workbook.project_id, workbook.id + '.twb')
-                print("workbook: {} > {}".format(workbook.name, twb))
-                tableau_servers[input]["server"].workbooks.download(workbook.id, filepath = twb)
-                try:
-                    workbook.project_id = pmap[workbook.project_id]
-                    tableau_servers[output]["server"].workbooks.publish(workbook, twb, TSC.Server.PublishMode.CreateNew)
-                # tableau_servers[input]["server"].workbooks.populate_connections(workbook)
-                # cc = TSC.ConnectionCredentials(workbook.connections[0].username, passwords[workbook.connections[0].username], embed = True, oauth = False)
-                    # tableau_servers[output]["server"].workbooks.publish(workbook, twb, TSC.Server.PublishMode.Overwrite, connection_credentials = cc)
-                    tableau_servers[output]["server"].workbooks.publish(workbook, twb, TSC.Server.PublishMode.Overwrite)
-                # try:
-                except Exception as e:
-                    print("WARNING: {}".format(e))
-                    
+            process_queue = Queue(params["run"]["config"]["threads"])
+            for i, workbook in enumerate(all_workbooks):
+                process_queue.put(i)
+                thread = Process(target=migrate_workbook, args=[i, workbook,process_queue,input,output])
+                thread.start()
+            while (process_queue.qsize() > 0):
+                time.sleep(1)
+
+def download_workbooks(input="in"):
+    with tableau_servers[input]["server"].auth.sign_in(tableau_servers[input]["auth"]):
+        all_workbooks, pagination_item = tableau_servers[input]["server"].workbooks.get()
+        print("\nThere are {} workbooks on site: ".format(pagination_item.total_available))
+        process_queue = Queue(params["run"]["config"]["threads"])
+        for i, workbook in enumerate(all_workbooks):
+            try:
+                os.mkdir(os.path.join(ipath, workbook.project_id))
+            except:
+                pass
+            twb = os.path.join(ipath, workbook.project_id, workbook.id + '.twb')
+            print("workbook: {} > {}".format(workbook.name, twb))
+            tableau_servers[input]["server"].workbooks.download(workbook.id, filepath = twb)
+
+
 def delete_site(server="out"):
     try:
         with tableau_servers[server]["server"].auth.sign_in(tableau_servers[server]["auth"]):
@@ -170,6 +199,8 @@ def create_site(server="out"):
                                                 tableau_servers[server]["password"], 
                                                 site_id = tableau_servers[server]["site_id"])
 
+def test(input="in", output="out"):
+    print("input: {} , output: {}".format(input,output))
 
 # run macro as described in yaml
 if __name__ == '__main__':
@@ -178,5 +209,13 @@ if __name__ == '__main__':
 
     for action in params["run"]["actions"]:
         print("executing {}".format(action))
-        getattr(__main__, action)()
-
+        if type(action) == str:
+            print(action)
+            getattr(__main__, action)()
+        else:
+            args = action[list(action.keys())[0]]
+            if (type(args) == str):
+                args = [args]
+            action = list(action.keys())[0]
+            print("action {} args {}".format(action, args))
+            getattr(__main__, action)(* args)
